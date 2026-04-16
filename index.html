@@ -154,15 +154,23 @@ cv.addEventListener('mouseup',   e => { if(e.button===0) INP.lmb=false; });
 const BUFFS = {
   lifesteal:{
     name:'Lifesteal', icon:'🩸',
-    lvl:[{d:'Heal 20% of damage dealt'},{d:'Heal 35% of damage dealt'},{d:'Heal 50% of damage dealt'}],
-    apply(p,l){p.lifesteal=[.2,.35,.5][l-1]},
-    ultra:true,  ultraD:'Lifesteal raised to 75%!',
-    ultraFn(p){p.lifesteal=.75},
-    maximus:true, maximusD:'[R] Life Drain — red beam on highest-HP enemy until dead or 10s',
+    lvl:[{d:'Heal 3% of damage dealt'},{d:'Heal 8% of damage dealt'},{d:'Heal 15% of damage dealt'}],
+    apply(p,l){p.lifesteal=[.03,.08,.15][l-1]},
+    ultra:true,  ultraD:'Lifesteal raised to 25%!',
+    ultraFn(p){p.lifesteal=.25},
+    maximus:true, maximusD:'[R] Life Drain — red beam drains enemy for 20s (reduced damage & healing)',
     maximusFn(p){return mkSkill('r','Life Drain',25,sk=>{
-      sk.active=true; sk.activeTimer=10;
+      sk.active=true; sk.activeTimer=20;
       sk.target=(G.enemies.reduce((a,b)=>(!a||b.hp>a.hp)?b:a,null)||{}).id||null;
     })}
+  },
+  revolveShield:{
+    name:'Revolving Shield', icon:'🔵',
+    lvl:[{d:'3 shield orbs — each blocks one hit. Recharges in 10s or on stage clear'},{d:'5 shield orbs'},{d:'7 shield orbs'}],
+    apply(p,l){
+      const n=[3,5,7][l-1];
+      p.shieldOrbMax=n; p.shieldOrbs=n; p.shieldOrbRegen=0;
+    },
   },
   buckshot:{
     name:'Buckshot', icon:'💥',
@@ -295,6 +303,15 @@ function hurtPlayer(dmg){
   const p=G.p;
   if(G.godMode) return;
   if(p.iframes>0) return;
+  // Revolving shield absorbs the hit
+  if(p.shieldOrbs>0){
+    p.shieldOrbs--;
+    burst(p.x,p.y,'#0af',8,3);
+    floaty(p.x,p.y-22,'BLOCKED!','#0af');
+    shake(3,.12);
+    if(p.shieldOrbs===0&&p.shieldOrbMax>0) p.shieldOrbRegen=10;
+    return;
+  }
   const raw=Math.max(1,dmg-(p.armor||0));
   const fin=Math.ceil(raw*(p.dtaken||1));
   p.hp-=fin; p.iframes=.45;
@@ -335,7 +352,8 @@ const ET = {
   gunner:  {n:'Gunner',  col:'#48f',sz:13,hp:50, spd:1.0,dmg:6, rwd:8,  sk:['shoot'],scd:2.4,stm:1.5},
   medic:   {n:'Medic',   col:'#4f8',sz:13,hp:48, spd:1.1,dmg:5, rwd:10, sk:['heal'], hcd:5,  htm:3},
   splitter:{n:'Splitter',col:'#f8a',sz:16,hp:65, spd:1.0,dmg:10,rwd:8,  sk:['split']},
-  shielder:{n:'Shielder',col:'#aaf',sz:15,hp:55, spd:.85,dmg:12,rwd:10, sk:['shield'],sHp:35,sMax:35},
+  shielder:  {n:'Shielder',  col:'#aaf',sz:15,hp:55, spd:.85,dmg:12,rwd:10, sk:['shield'],sHp:35,sMax:35},
+  miniWarden:{n:'Mini Warden',col:'#f55',sz:19,hp:220,spd:1.6,dmg:18,rwd:16, sk:['charge'],chCd:6},
 };
 
 // ── BOSS DATA ─────────────────────────────────────────────────────────────
@@ -378,6 +396,7 @@ function mkPlayer(){
     weapon:'gun', gunCd:0, knifeCd:0,
     knifeAct:false, knifeTm:0, knifeAng:0,
     iframes:0,
+    shieldOrbs:0, shieldOrbMax:0, shieldOrbRegen:0,
     buffs:{}, debuffs:{}, skills:[],
   };
 }
@@ -406,7 +425,9 @@ function rndType(s){
   if(s>=3)pool.push('gunner');
   if(s>=4)pool.push('brute');
   if(s>=5)pool.push('medic','splitter');
-  if(s>=7)pool.push('shielder');
+  if(s>=7) pool.push('shielder');
+  if(s>=11) pool.push('miniWarden');
+  if(s>=16) pool.push('miniWarden'); // more frequent at higher stages
   return pool[Math.floor(Math.random()*pool.length)];
 }
 
@@ -457,6 +478,8 @@ function spawnEnemy(type, bossData){
     shootTm:td.stm||999, shootCd:td.scd||999,
     healTm:td.htm||999, healCd:td.hcd||999,
     shieldHp:td.sHp||0, shieldMax:td.sMax||0,
+    chargeTm:td.sk?.includes('charge')?rnd(2.5,5):999,
+    chargeCd:td.chCd||6, charging:false, chDir:null, chDur:0,
     _split:false,
   };
   G.enemies.push(e); return e;
@@ -544,6 +567,15 @@ function update(dt){
   p.gunCd=Math.max(0,p.gunCd-dt*fr);
   p.knifeCd=Math.max(0,p.knifeCd-dt*fr);
   p.iframes=Math.max(0,p.iframes-dt);
+  // Shield orb recharge
+  if(p.shieldOrbs===0&&p.shieldOrbMax>0&&p.shieldOrbRegen>0){
+    p.shieldOrbRegen=Math.max(0,p.shieldOrbRegen-dt);
+    if(p.shieldOrbRegen===0){
+      p.shieldOrbs=p.shieldOrbMax;
+      floaty(p.x,p.y-28,'SHIELD BACK!','#0af');
+      burst(p.x,p.y,'#0af',12,3);
+    }
+  }
 
   // Shooting
   if(p.weapon==='gun'&&(INP.lmb||INP.ljust)&&p.gunCd<=0){
@@ -616,9 +648,26 @@ function updateEnemies(dt){
     if(e.slowTimer<=0) e.slowF=1;
     const sp=e.spd*(e.slowF||1);
     // Move toward player
-    if(!e.dashing){
+    if(!e.dashing&&!e.charging){
       const dx=p.x-e.x,dy=p.y-e.y,d=Math.sqrt(dx*dx+dy*dy)||1;
       e.x+=dx/d*sp; e.y+=dy/d*sp;
+    }
+    // Charge skill (non-boss only)
+    if(e.sk.includes('charge')&&!e.isBoss){
+      e.chargeTm-=dt;
+      if(e.chargeTm<=0&&!e.charging){
+        const dx=p.x-e.x,dy=p.y-e.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+        e.charging=true; e.chDur=0.45;
+        e.chDir={x:dx/d,y:dy/d};
+        e.chargeTm=e.chargeCd;
+        floaty(e.x,e.y-25,'CHARGE!','#f55');
+        burst(e.x,e.y,'#f55',6,3);
+      }
+      if(e.charging){
+        e.chDur-=dt;
+        e.x+=e.chDir.x*e.spd*8; e.y+=e.chDir.y*e.spd*8;
+        if(e.chDur<=0) e.charging=false;
+      }
     }
     // Dash skill
     if(e.sk.includes('dash')){
@@ -927,7 +976,7 @@ function updateSkills(dt){
       if(sk.name==='Life Drain'&&sk.target){
         const t=G.enemies.find(e=>e.id===sk.target);
         if(!t||t.hp<=0){sk.active=false;sk.cd=sk.maxCd;sk.target=null;}
-        else hurtEnemy(t, baseDmg(p)*0.5*dt*10);
+        else hurtEnemy(t, baseDmg(p)*0.18*dt*10);
       }
     }
   }
@@ -1056,6 +1105,7 @@ function nextStage(){
   hide('buff'); hide('clear');
   G.enemies=[]; G.bul=[]; G.ebul=[];
   G.p.hp=Math.min(G.p.maxHp, G.p.hp+10); // small regen
+  if(G.p.shieldOrbMax>0){ G.p.shieldOrbs=G.p.shieldOrbMax; G.p.shieldOrbRegen=0; }
   buildWave(G.stage);
   updateHUD();
 }
@@ -1216,6 +1266,26 @@ function render(){
     cx.shadowColor='#ff8'; cx.shadowBlur=8;
     cx.beginPath(); cx.arc(p.x,p.y,48,p.knifeAng-Math.PI*.45,p.knifeAng+Math.PI*.45);
     cx.stroke(); cx.shadowBlur=0;
+  }
+  // Revolving shield orbs
+  if(p.shieldOrbMax>0){
+    if(p.shieldOrbs>0){
+      const now=Date.now()*0.0022;
+      for(let i=0;i<p.shieldOrbs;i++){
+        const a=now+i/p.shieldOrbMax*Math.PI*2;
+        const ox=p.x+Math.cos(a)*26, oy=p.y+Math.sin(a)*26;
+        cx.fillStyle='#0af'; cx.shadowColor='#0af'; cx.shadowBlur=10;
+        cx.beginPath(); cx.arc(ox,oy,5,0,Math.PI*2); cx.fill();
+      }
+      cx.shadowBlur=0;
+    } else if(p.shieldOrbRegen>0){
+      // Recharge ring
+      const pct=1-(p.shieldOrbRegen/10);
+      cx.strokeStyle='rgba(0,170,255,0.4)'; cx.lineWidth=2;
+      cx.beginPath(); cx.arc(p.x,p.y,26,-Math.PI/2,-Math.PI/2+pct*Math.PI*2); cx.stroke();
+      cx.fillStyle='rgba(0,170,255,0.6)'; cx.font='10px Courier New'; cx.textAlign='center';
+      cx.fillText(`${Math.ceil(p.shieldOrbRegen)}s`,p.x,p.y+p.sz+22);
+    }
   }
   // HP bar under player
   const bw=38,bh=5,bx=p.x-19,by=p.y+p.sz+4;
