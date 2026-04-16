@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <title>Arena Blast</title>
 <style>
-/* Core page and UI overlay styling */
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#111;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden;font-family:'Courier New',monospace;color:#fff}
 canvas{display:block;cursor:crosshair}
@@ -70,7 +69,7 @@ canvas{display:block;cursor:crosshair}
   <button class="btn" id="b-start">START GAME</button>
   <div style="color:#555;font-size:.78em;margin-top:18px;text-align:center;line-height:1.7">
     WASD Move &nbsp;|&nbsp; Mouse Aim &nbsp;|&nbsp; LClick / [1] Shoot &nbsp;|&nbsp; [2] / F Knife<br>
-    [Q][E][R] Active Skills &nbsp;|&nbsp; [Space] Dash (if unlocked)
+    [Q][E][R] Active Skills &nbsp;|&nbsp; [C][V] Star Gazer Skills &nbsp;|&nbsp; [Space] Dash (if unlocked)
   </div>
 </div>
 
@@ -103,6 +102,23 @@ canvas{display:block;cursor:crosshair}
   <p style="color:#aaa;margin-bottom:14px">Choose one upgrade — push beyond the limit</p>
   <div class="cards" id="m-cards"></div>
   <button class="btn" id="b-skip" style="margin-top:14px">Skip</button>
+</div>
+
+<!-- STAR GAZER -->
+<div class="screen" id="s-stargazer" style="display:none">
+  <h2 style="color:#f0a">⭐ The Star Gazer</h2>
+  <p style="color:#aaa;margin-bottom:6px">Combine two ULTRA powers into a new [C]/[V] skill</p>
+  <div id="sg-slot" style="color:#fa0;font-size:.95em;margin-bottom:12px"></div>
+  <div class="cards" id="sg-cards"></div>
+  <button class="btn" id="b-sg-skip" style="margin-top:14px">Skip</button>
+</div>
+
+<!-- DEALER -->
+<div class="screen" id="s-dealer" style="display:none">
+  <h2 style="color:#f0f">🃏 The Dealer</h2>
+  <p style="color:#aaa;margin-bottom:14px">High risk, high reward — choose one card.</p>
+  <div class="cards" id="dealer-cards"></div>
+  <button class="btn" id="b-dealer-skip" style="margin-top:14px">Skip</button>
 </div>
 
 <!-- GAME OVER -->
@@ -140,7 +156,7 @@ document.addEventListener('keydown', e => {
   if (!G || G.phase !== 'playing') return;
   if (e.key==='1') setWeapon('gun');
   if (e.key==='2') setWeapon('knife');
-  ['q','e','r'].forEach(k => { if (e.key.toLowerCase()===k) useSkill(k); });
+  ['q','e','r','c','v'].forEach(k => { if (e.key.toLowerCase()===k) useSkill(k); });
 });
 document.addEventListener('keyup', e => { INP.keys[e.key.toLowerCase()] = false; });
 cv.addEventListener('mousemove', e => {
@@ -171,6 +187,32 @@ const BUFFS = {
       const n=[3,5,7][l-1];
       p.shieldOrbMax=n; p.shieldOrbs=n; p.shieldOrbRegen=0;
     },
+  },
+  slowField:{
+    name:'Slow Field', icon:'🌀',
+    lvl:[{d:'Every 12s: a slow field appears on the map (–60% enemy speed, 6s)'},{d:'Two concurrent fields, –72% speed'},{d:'Three fields, –84% speed'}],
+    apply(p,l){
+      p.slowFieldActive=true; p.slowFieldCount=[1,2,3][l-1];
+      p.slowFieldPct=[0.4,0.28,0.16][l-1]; p.slowFieldInterval=12;
+      if(!p.slowFieldTimer||p.slowFieldTimer>12) p.slowFieldTimer=12;
+    },
+    maximus:true, maximusD:'[Q] Frozen Domain — freeze everything for 10s. Boss breaks free at 7s.',
+    maximusFn(p){return mkSkill('q','Frozen Domain',40,sk=>{
+      sk.cd=sk.maxCd;
+      G.frozenDomain=true; G.frozenTimer=10; G.frozenBossBreakTimer=7; G.bossFrozenBroke=false;
+      G.freezeFlash=0.5; shake(12,0.6);
+      floaty(G.p.x,G.p.y-45,'FROZEN DOMAIN!','#88f');
+    })}
+  },
+  ricochet:{
+    name:'Ricochet', icon:'↪',
+    lvl:[{d:'Bullets split into 2 on hit (–50% dmg each). Incompatible with Piercing'},{d:'Ricochet bullets travel 30% faster'},{d:'Three ricochet bullets per split'}],
+    apply(p,l){
+      p.ricochet=true; p.rCnt=[2,2,3][l-1]; p.ricoSpd=[1,1.3,1.3][l-1];
+      p.pierce=0;
+    },
+    ultra:true, ultraD:'Ricochet bullets apply a random effect: slow, poison, fire, or blindness!',
+    ultraFn(p){p.ricoUltra=true},
   },
   buckshot:{
     name:'Buckshot', icon:'💥',
@@ -247,6 +289,82 @@ const BUFFS = {
   },
 };
 
+// ── STAR GAZER COMBINATIONS ───────────────────────────────────────────────
+function sgKey(a,b){return[a,b].sort().join('+');}
+const SG_COMBOS={
+  [sgKey('armor','ironSkin')]:{
+    name:'Immunity', icon:'⚜',
+    desc:'Next hit in 2 minutes deals 0 damage. After absorbing the hit, normal damage resumes.',
+    mkSkill(p,key){
+      return{key,name:'Immunity',cd:0,maxCd:90,active:false,activeTimer:0,isSG:true,data:null,
+        fn(sk){sk.cd=sk.maxCd;sk.active=true;sk.activeTimer=120;p.immuneNextHit=true;
+          floaty(p.x,p.y-40,'IMMUNITY!','#fff');burst(p.x,p.y,'#fff',18,3);shake(6,0.3);}};
+    }
+  },
+  [sgKey('lifesteal','rapid')]:{
+    name:'Piercing Blood', icon:'🩸',
+    desc:'Sacrifice 15% HP — 6 red orbs orbit and sweep 360°, dealing 200% dmg to all enemies.',
+    mkSkill(p,key){
+      return{key,name:'Pierc.Blood',cd:0,maxCd:25,active:false,activeTimer:0,isSG:true,data:null,
+        fn(sk){
+          const cost=Math.max(1,Math.floor(p.hp*0.15));
+          if(p.hp-cost<1){floaty(p.x,p.y-30,'NOT ENOUGH HP!','#f44');return;}
+          sk.cd=sk.maxCd; p.hp=Math.max(1,p.hp-cost);
+          floaty(p.x,p.y-30,`-${cost} HP`,'#f44');
+          G.sgOrbs={x:p.x,y:p.y,angle:0,life:2.2,done:false,hitSet:new Set()};
+          burst(p.x,p.y,'#f00',22,4);shake(8,0.4);}};
+    }
+  },
+  [sgKey('buckshot','sharp')]:{
+    name:'Overload', icon:'💥',
+    desc:'Fire 30 bullets in all directions at 150% damage.',
+    mkSkill(p,key){
+      return{key,name:'Overload',cd:0,maxCd:20,active:false,activeTimer:0,isSG:true,data:null,
+        fn(sk){sk.cd=sk.maxCd;
+          const d=Math.floor(baseDmg(p)*1.5);
+          for(let i=0;i<30;i++){const a=i/30*Math.PI*2;fireRicoBullet(p.x,p.y,Math.cos(a)*7.5,Math.sin(a)*7.5,d,null);}
+          burst(p.x,p.y,'#fa0',30,5);shake(12,0.5);}};
+    }
+  },
+  [sgKey('pierce','swift')]:{
+    name:'Phantom Rush', icon:'👻',
+    desc:'Teleport to cursor — deal 250% dmg to all enemies in radius 90.',
+    mkSkill(p,key){
+      return{key,name:'Phntm Rush',cd:0,maxCd:18,active:false,activeTimer:0,isSG:true,data:null,
+        fn(sk){sk.cd=sk.maxCd;burst(p.x,p.y,p.col,12,4);
+          p.x=clamp(INP.mx,AR.x+p.sz,AR.x+AR.w-p.sz);
+          p.y=clamp(INP.my,AR.y+p.sz,AR.y+AR.h-p.sz);
+          burst(p.x,p.y,p.col,12,4);
+          const d=Math.floor(baseDmg(p)*2.5);
+          G.enemies.forEach(e=>{if(dist2(p,e)<90+e.sz)hurtEnemy(e,d);});
+          p.iframes=0.5;shake(10,0.4);}};
+    }
+  },
+};
+function sgFallback(p,key){
+  return{key,name:'Convergence',cd:0,maxCd:30,active:false,activeTimer:0,isSG:true,data:null,
+    fn(sk){sk.cd=sk.maxCd;sk.active=true;sk.activeTimer=15;
+      sk.data={dm:p.dmult||1,sm:p.smult||1};
+      p.dmult=(p.dmult||1)*2;p.smult=(p.smult||1)*2;
+      floaty(p.x,p.y-40,'CONVERGENCE!','#f0f');burst(p.x,p.y,'#f0f',20,4);shake(8,0.4);}};
+}
+
+// ── DEALER CARDS ──────────────────────────────────────────────────────────
+const DEALER_CARDS=[
+  {name:'Double Edge',icon:'⚔',buff:'+200% damage',cost:'Take 2× all damage',
+   apply(p){p.dmult=(p.dmult||1)*3;p.dtaken=(p.dtaken||1)*2;}},
+  {name:'Glass Cannon',icon:'🔮',buff:'Speed ×2 & fire rate ×2',cost:'Max HP reduced to 25%',
+   apply(p){p.frate=(p.frate||1)*2;p.smult=(p.smult||1)*2;p.maxHp=Math.max(25,Math.floor(p.maxHp*0.25));p.hp=Math.min(p.hp,p.maxHp);}},
+  {name:'Iron Will',icon:'💪',buff:'+200 max HP, full heal',cost:'Fire rate –50%',
+   apply(p){p.maxHp+=200;p.hp=p.maxHp;p.frate=(p.frate||1)*0.5;}},
+  {name:'Cursed Rounds',icon:'💀',buff:'+300% bullet damage',cost:'Lose 1 life permanently',
+   apply(p){p.dmult=(p.dmult||1)*4;G.lives=Math.max(0,G.lives-1);}},
+  {name:'Demon Pact',icon:'👹',buff:'Speed ×3 & +25 armor',cost:'+75% damage taken',
+   apply(p){p.smult=(p.smult||1)*3;p.armor=(p.armor||0)+25;p.dtaken=(p.dtaken||1)*1.75;}},
+  {name:'Adrenaline',icon:'💉',buff:'+120% fire rate & +50% damage',cost:'-40 max HP permanently',
+   apply(p){p.frate=(p.frate||1)*2.2;p.dmult=(p.dmult||1)*1.5;p.maxHp=Math.max(20,p.maxHp-40);p.hp=Math.min(p.hp,p.maxHp);}},
+];
+
 // ── DEBUFF DEFINITIONS ────────────────────────────────────────────────────
 const DEBUFFS = {
   sluggish:{name:'Sluggish',   d:'-22% speed',       fn(p){p.smult=Math.max(.4,(p.smult||1)*.78)}},
@@ -303,6 +421,14 @@ function hurtPlayer(dmg){
   const p=G.p;
   if(G.godMode) return;
   if(p.iframes>0) return;
+  // Immunity skill absorbs the hit
+  if(p.immuneNextHit){
+    p.immuneNextHit=false;
+    const immSk=p.skills.find(s=>s.name==='Immunity');
+    if(immSk){immSk.active=false;immSk.cd=immSk.maxCd;}
+    floaty(p.x,p.y-28,'IMMUNE!','#fff');
+    burst(p.x,p.y,'#fff',14,4);shake(4,0.15);return;
+  }
   // Revolving shield absorbs the hit
   if(p.shieldOrbs>0){
     p.shieldOrbs--;
@@ -337,6 +463,17 @@ function fireBullet(x,y,vx,vy){
     hits: [],
     expl: p.explosive, exR: p.exR||45,
     dist:0, maxDist:620*(p.brange||1),
+    canRico: p.ricochet||false, isRico:false, ricoEffect:null,
+  });
+}
+
+function fireRicoBullet(x,y,vx,vy,dmg,effect){
+  const p=G.p;
+  G.bul.push({
+    id:++_bid, x, y, vx, vy, dmg,
+    pierce:0, hits:[], expl:false, exR:45,
+    dist:0, maxDist:620*(p.brange||1),
+    canRico:false, isRico:true, ricoEffect:effect||null,
   });
 }
 
@@ -375,6 +512,9 @@ function initGame(){
   G = {
     phase:'playing', stage:1, lives:3,
     enemies:[], bul:[], ebul:[], fx:[], floats:[], slashFx:[], slashFlash:0,
+    frozenDomain:false, frozenTimer:0, frozenBossBreakTimer:0, bossFrozenBroke:false, freezeFlash:0,
+    slowFields:[], sgOrbs:null,
+    npcWindow:-1, npcType:null, npcStageTarget:-1, npcReady:false, npcDone:false,
     spawnQ:[], spawnT:0, allSpawned:false,
     merchantReady:false, merchantDone:false,
     p: mkPlayer(),
@@ -395,8 +535,10 @@ function mkPlayer(){
     hasDash:false, dashCd:0,
     weapon:'gun', gunCd:0, knifeCd:0,
     knifeAct:false, knifeTm:0, knifeAng:0,
-    iframes:0,
+    iframes:0, immuneNextHit:false,
     shieldOrbs:0, shieldOrbMax:0, shieldOrbRegen:0,
+    slowFieldActive:false, slowFieldCount:1, slowFieldPct:0.4, slowFieldInterval:12, slowFieldTimer:12,
+    ricochet:false, rCnt:2, ricoSpd:1, ricoUltra:false,
     buffs:{}, debuffs:{}, skills:[],
   };
 }
@@ -457,6 +599,7 @@ function spawnEnemy(type, bossData){
     b.slashActive=false; b.slashCount=0; b.slashTimer=0;
     b.slashSafeX=0; b.slashSafeY=0; b.slashSafeR=70;
     b.slashIntro=false; b.slashIntroTimer=0;
+    b.poisonTimer=0; b.poisonDmg=0; b.fireTimer=0; b.fireDmg=0; b.blindTimer=0; b.missChance=0;
     G.enemies.push(b); return b;
   }
   const td=ET[type]||ET.grunt;
@@ -480,6 +623,7 @@ function spawnEnemy(type, bossData){
     shieldHp:td.sHp||0, shieldMax:td.sMax||0,
     chargeTm:td.sk?.includes('charge')?rnd(2.5,5):999,
     chargeCd:td.chCd||6, charging:false, chDir:null, chDur:0,
+    poisonTimer:0, poisonDmg:0, fireTimer:0, fireDmg:0, blindTimer:0, missChance:0,
     _split:false,
   };
   G.enemies.push(e); return e;
@@ -592,9 +736,48 @@ function update(dt){
   }
   if(p.knifeAct){p.knifeTm-=dt; if(p.knifeTm<=0)p.knifeAct=false;}
 
-  // Spawn queue — paused during Thousand Slash
+  // Slow field spawning
+  if(p.slowFieldActive){
+    p.slowFieldTimer=Math.max(0,p.slowFieldTimer-dt);
+    if(p.slowFieldTimer<=0){
+      if(G.slowFields.length>=p.slowFieldCount) G.slowFields.shift();
+      G.slowFields.push({x:AR.x+70+Math.random()*(AR.w-140),y:AR.y+70+Math.random()*(AR.h-140),r:80,timer:6,maxTimer:6});
+      p.slowFieldTimer=p.slowFieldInterval;
+    }
+  }
+  G.slowFields=G.slowFields.filter(f=>{f.timer-=dt;return f.timer>0;});
+
+  // Frozen domain tick
+  if(G.frozenDomain){
+    G.frozenTimer=Math.max(0,G.frozenTimer-dt);
+    if(G.frozenBossBreakTimer>0){
+      G.frozenBossBreakTimer=Math.max(0,G.frozenBossBreakTimer-dt);
+      if(G.frozenBossBreakTimer===0&&!G.bossFrozenBroke){
+        G.bossFrozenBroke=true;
+        const _b=G.enemies.find(e=>e.isBoss);
+        if(_b) floaty(_b.x,_b.y-45,'BREAKS FREE!','#f44');
+        shake(10,0.5);
+      }
+    }
+    // Boss limited movement after breaking free
+    if(G.frozenBossBreakTimer<=0){
+      for(const e of G.enemies){
+        if(e.isBoss){
+          const ddx=p.x-e.x,ddy=p.y-e.y,dd=Math.sqrt(ddx*ddx+ddy*ddy)||1;
+          e.x=clamp(e.x+ddx/dd*e.spd*0.35,AR.x+e.sz,AR.x+AR.w-e.sz);
+          e.y=clamp(e.y+ddy/dd*e.spd*0.35,AR.y+e.sz,AR.y+AR.h-e.sz);
+        }
+      }
+    }
+    if(G.frozenTimer<=0){
+      G.frozenDomain=false; G.bossFrozenBroke=false;
+      floaty(p.x,p.y-45,'TIME RESUMES!','#88f'); shake(8,0.4);
+    }
+  }
+
+  // Spawn queue — paused during Thousand Slash or Frozen Domain
   const _slashRunning=G.enemies.some(e=>e.isBoss&&e.slashActive);
-  if(!_slashRunning){
+  if(!_slashRunning&&!G.frozenDomain){
     G.spawnT+=dt;
     while(G.spawnQ.length&&G.spawnQ[0].delay<=G.spawnT){
       const item=G.spawnQ.shift();
@@ -604,9 +787,11 @@ function update(dt){
     if(!G.spawnQ.length) G.allSpawned=true;
   }
 
-  updateEnemies(dt);
-  updateBullets(dt);
-  updateEBullets(dt);
+  if(!G.frozenDomain){
+    updateEnemies(dt);
+    updateBullets(dt);
+    updateEBullets(dt);
+  }
   updateSkills(dt);
 
   // FX
@@ -614,6 +799,29 @@ function update(dt){
   G.floats=G.floats.filter(f=>{f.y+=f.vy*dt;f.t-=dt;return f.t>0;});
   G.slashFx=G.slashFx.filter(s=>{s.life-=dt;return s.life>0;});
   if(G.slashFlash>0) G.slashFlash-=dt;
+  if(G.freezeFlash>0) G.freezeFlash-=dt;
+
+  // Piercing Blood orbs
+  if(G.sgOrbs){
+    G.sgOrbs.angle+=dt*(Math.PI*2/1.8);
+    G.sgOrbs.life-=dt;
+    if(!G.sgOrbs.done){
+      const r=70,dmg=Math.floor(baseDmg(G.p)*2);
+      for(let i=0;i<6;i++){
+        const a=G.sgOrbs.angle+i/6*Math.PI*2;
+        const ox=G.sgOrbs.x+Math.cos(a)*r,oy=G.sgOrbs.y+Math.sin(a)*r;
+        G.enemies.forEach(e=>{
+          const hk=`${e.id}-${i}`;
+          if(!G.sgOrbs.hitSet.has(hk)&&dist2({x:ox,y:oy},e)<e.sz+16){hurtEnemy(e,dmg);G.sgOrbs.hitSet.add(hk);}
+        });
+      }
+      if(G.sgOrbs.angle>=Math.PI*2){
+        G.sgOrbs.done=true;
+        burst(G.sgOrbs.x,G.sgOrbs.y,'#f00',40,5);shake(12,0.6);
+      }
+    }
+    if(G.sgOrbs.life<=0) G.sgOrbs=null;
+  }
 
   if(G.allSpawned&&G.enemies.length===0) stageClear();
   updateHUD();
@@ -643,10 +851,18 @@ function updateEnemies(dt){
       floaty(e.x,e.y-45,'PHASE 2!','#f0f');
       shake(14,.6); burst(e.x,e.y,e.col,50,5);
     }
+    // Slow fields
+    for(const sf of G.slowFields){
+      if(dist2(e,{x:sf.x,y:sf.y})<sf.r+e.sz){e.slowTimer=0.2;e.slowF=Math.min(e.slowF||1,G.p.slowFieldPct);}
+    }
     // Slow
     e.slowTimer=Math.max(0,e.slowTimer-dt);
     if(e.slowTimer<=0) e.slowF=1;
     const sp=e.spd*(e.slowF||1);
+    // Poison / Fire DoT
+    if(e.poisonTimer>0){e.poisonTimer=Math.max(0,e.poisonTimer-dt);hurtEnemy(e,e.poisonDmg*dt);if(Math.random()<.12)burst(e.x,e.y,'#4f4',1,2);}
+    if(e.fireTimer>0){e.fireTimer=Math.max(0,e.fireTimer-dt);hurtEnemy(e,e.fireDmg*dt);if(Math.random()<.12)burst(e.x,e.y,'#f60',1,2);}
+    if(e.blindTimer>0) e.blindTimer=Math.max(0,e.blindTimer-dt);
     // Move toward player
     if(!e.dashing&&!e.charging){
       const dx=p.x-e.x,dy=p.y-e.y,d=Math.sqrt(dx*dx+dy*dy)||1;
@@ -713,8 +929,11 @@ function updateEnemies(dt){
     // Boss skills
     if(e.isBoss) updateBoss(e,dt);
 
-    // Contact dmg
-    if(dist2(p,e)<p.sz+e.sz) hurtPlayer(e.dmg);
+    // Contact dmg (with blind miss chance)
+    if(dist2(p,e)<p.sz+e.sz){
+      if(e.blindTimer>0&&Math.random()<(e.missChance||0)) floaty(e.x,e.y-18,'MISS','#aaa');
+      else hurtPlayer(e.dmg);
+    }
 
     // Keep in arena
     e.x=clamp(e.x,AR.x+e.sz,AR.x+AR.w-e.sz);
@@ -924,6 +1143,14 @@ function updateBoss(e,dt){
 }
 
 // ── UPDATE BULLETS ────────────────────────────────────────────────────────
+function applyRicoEffect(e,eff){
+  const p=G.p;
+  if(eff==='slow'){e.slowTimer=3;e.slowF=Math.min(e.slowF||1,0.35);}
+  else if(eff==='poison'){e.poisonTimer=Math.max(e.poisonTimer||0,4);e.poisonDmg=Math.max(2,Math.floor(baseDmg(p)*0.08));}
+  else if(eff==='fire'){e.fireTimer=Math.max(e.fireTimer||0,3);e.fireDmg=Math.max(3,Math.floor(baseDmg(p)*0.12));}
+  else if(eff==='blind'){e.blindTimer=4;e.missChance=0.6;}
+}
+
 function updateBullets(dt){
   const dead=[];
   for(const b of G.bul){
@@ -937,6 +1164,19 @@ function updateBullets(dt){
         hurtEnemy(e,b.dmg);
         b.hits.push(e.id);
         if(b.expl) explode(b.x,b.y,b.exR,b.dmg*.5);
+        if(b.ricoEffect) applyRicoEffect(e,b.ricoEffect);
+        if(b.canRico){
+          // Split into ricochet bullets
+          const ang=Math.atan2(b.vy,b.vx);
+          const spd=Math.sqrt(b.vx*b.vx+b.vy*b.vy);
+          const offsets=G.p.rCnt===3?[-0.65,0,0.65]:[-0.5,0.5];
+          for(const off of offsets){
+            const a=ang+off+(Math.random()-.5)*0.15;
+            const eff=G.p.ricoUltra?['slow','poison','fire','blind'][Math.floor(Math.random()*4)]:null;
+            fireRicoBullet(b.x,b.y,Math.cos(a)*spd*(G.p.ricoSpd||1),Math.sin(a)*spd*(G.p.ricoSpd||1),Math.floor(b.dmg*0.5),eff);
+          }
+          kill=true; break;
+        }
         if(b.pierce<=0){kill=true;break;}
         b.pierce--;
       }
@@ -971,7 +1211,11 @@ function updateSkills(dt){
     sk.cd=Math.max(0,sk.cd-dt);
     if(sk.active){
       sk.activeTimer-=dt;
-      if(sk.activeTimer<=0){sk.active=false;sk.cd=sk.maxCd;}
+      if(sk.activeTimer<=0){
+        if(sk.name==='Immunity') p.immuneNextHit=false;
+        if(sk.name==='Convergence'&&sk.data){p.dmult=sk.data.dm;p.smult=sk.data.sm;sk.data=null;}
+        sk.active=false;sk.cd=sk.maxCd;
+      }
       // Life drain
       if(sk.name==='Life Drain'&&sk.target){
         const t=G.enemies.find(e=>e.id===sk.target);
@@ -983,13 +1227,30 @@ function updateSkills(dt){
 }
 
 // ── STAGE EVENTS ──────────────────────────────────────────────────────────
+function checkNpcWindow(){
+  const win=Math.floor((G.stage-1)/25);
+  if(win!==G.npcWindow){
+    G.npcWindow=win; G.npcDone=false;
+    const roll=Math.random();
+    G.npcType=roll<0.45?'stargazer':roll<0.90?'dealer':null;
+    const ws=win*25+1, valid=[];
+    for(let s=ws+3;s<ws+22;s++){if(s%10!==0)valid.push(s);}
+    G.npcStageTarget=valid[Math.floor(Math.random()*valid.length)]||-1;
+  }
+}
+
 function stageClear(){
   if(G.phase!=='playing') return;
+  checkNpcWindow();
   G.phase='clear';
   document.getElementById('c-info').textContent=`Stage ${G.stage} Complete!`;
   show('clear');
-  G.merchantReady=G.stage>=5&&G.stage%5===0&&hasMerchantOffer();
+  G.npcReady=(!G.npcDone&&G.npcType&&G.stage===G.npcStageTarget)||false;
+  G.merchantReady=G.stage>=10&&G.stage%10===0&&hasMerchantOffer();
   G.merchantDone=false;
+  const btn=document.getElementById('b-tobuff');
+  if(G.npcReady) btn.textContent=G.npcType==='stargazer'?'⭐ Meet the Star Gazer':'🃏 Meet the Dealer';
+  else btn.textContent='CLAIM REWARD';
 }
 
 function stageFail(){
@@ -1046,6 +1307,8 @@ function showBuffScreen(){
 function getBuffChoices(){
   const p=G.p, out=[];
   for(const [id,def] of Object.entries(BUFFS)){
+    if(id==='pierce'&&p.buffs['ricochet']) continue;
+    if(id==='ricochet'&&p.buffs['pierce']) continue;
     const ex=p.buffs[id];
     if(!ex) out.push({id,name:`${def.name}`,desc:def.lvl[0].d,level:1});
     else if(ex.tier==='normal'&&ex.level<def.lvl.length)
@@ -1165,6 +1428,19 @@ function render(){
   cx.strokeStyle='#3a3a5a'; cx.lineWidth=2;
   cx.strokeRect(AR.x,AR.y,AR.w,AR.h);
 
+  // Slow fields
+  for(const sf of G.slowFields){
+    const pulse=0.5+Math.sin(Date.now()*0.003)*0.5;
+    cx.save();
+    cx.globalAlpha=(sf.timer/sf.maxTimer)*0.22+0.06;
+    cx.fillStyle='rgba(120,0,255,0.3)';
+    cx.beginPath(); cx.arc(sf.x,sf.y,sf.r,0,Math.PI*2); cx.fill();
+    cx.globalAlpha=(0.4+pulse*0.3)*(sf.timer/sf.maxTimer);
+    cx.strokeStyle='#80f'; cx.lineWidth=2; cx.shadowColor='#80f'; cx.shadowBlur=8;
+    cx.beginPath(); cx.arc(sf.x,sf.y,sf.r,0,Math.PI*2); cx.stroke();
+    cx.shadowBlur=0; cx.restore();
+  }
+
   // FX
   for(const f of G.fx){
     cx.globalAlpha=f.life/f.ml; cx.fillStyle=f.col;
@@ -1180,9 +1456,13 @@ function render(){
     if(b.orb)cx.shadowBlur=0;
   }
 
-  // Player bullets
-  cx.fillStyle='#ff8';
-  for(const b of G.bul){cx.beginPath();cx.arc(b.x,b.y,4,0,Math.PI*2);cx.fill();}
+  // Player bullets (ricochet bullets glow orange)
+  for(const b of G.bul){
+    cx.fillStyle=b.isRico?'#f80':'#ff8';
+    if(b.isRico){cx.shadowColor='#f80';cx.shadowBlur=6;}
+    cx.beginPath();cx.arc(b.x,b.y,4,0,Math.PI*2);cx.fill();
+    if(b.isRico) cx.shadowBlur=0;
+  }
 
   // Enemies
   for(const e of G.enemies){
@@ -1224,6 +1504,10 @@ function render(){
       cx.beginPath(); cx.arc(e.x,e.y,e.sz+10,0,Math.PI*2); cx.stroke();
       cx.setLineDash([]);
     }
+    // Status effect rings
+    if(e.poisonTimer>0){cx.strokeStyle='rgba(50,220,50,0.7)';cx.lineWidth=2;cx.beginPath();cx.arc(e.x,e.y,e.sz+4,0,Math.PI*2);cx.stroke();}
+    if(e.fireTimer>0){const fp=0.5+Math.sin(Date.now()*0.02)*0.5;cx.strokeStyle=`rgba(255,110,0,${0.5+fp*0.4})`;cx.lineWidth=2;cx.beginPath();cx.arc(e.x,e.y,e.sz+4,0,Math.PI*2);cx.stroke();}
+    if(e.blindTimer>0){cx.strokeStyle='rgba(200,200,200,0.55)';cx.lineWidth=2;cx.setLineDash([3,3]);cx.beginPath();cx.arc(e.x,e.y,e.sz+5,0,Math.PI*2);cx.stroke();cx.setLineDash([]);}
     // Immortal ring (Sovereign Tear Apart)
     if(e.immortal){
       const pulse=.5+Math.sin(Date.now()*.01)*.5;
@@ -1246,6 +1530,29 @@ function render(){
         cx.shadowBlur=0;
       }
     }
+  }
+
+  // Piercing Blood orbs
+  if(G.sgOrbs){
+    const r=70; const fa=Math.min(1,G.sgOrbs.life/0.5);
+    cx.save(); cx.globalAlpha=fa;
+    for(let i=0;i<6;i++){
+      const a=G.sgOrbs.angle+i/6*Math.PI*2;
+      const ox=G.sgOrbs.x+Math.cos(a)*r, oy=G.sgOrbs.y+Math.sin(a)*r;
+      cx.strokeStyle='rgba(255,0,0,0.5)'; cx.lineWidth=2;
+      cx.beginPath(); cx.moveTo(G.sgOrbs.x,G.sgOrbs.y); cx.lineTo(ox,oy); cx.stroke();
+      cx.fillStyle='#f00'; cx.shadowColor='#f00'; cx.shadowBlur=16;
+      cx.beginPath(); cx.arc(ox,oy,9,0,Math.PI*2); cx.fill();
+    }
+    cx.shadowBlur=0; cx.restore();
+  }
+  // Immunity glow on player
+  if(p.immuneNextHit){
+    const ip=0.6+Math.sin(Date.now()*0.008)*0.4;
+    cx.strokeStyle=`rgba(255,255,255,${ip})`; cx.lineWidth=3;
+    cx.shadowColor='#fff'; cx.shadowBlur=14;
+    cx.beginPath(); cx.arc(p.x,p.y,p.sz+8,0,Math.PI*2); cx.stroke();
+    cx.shadowBlur=0;
   }
 
   // Player
@@ -1411,6 +1718,25 @@ function render(){
     cx.restore();
   }
 
+  // Frozen domain overlay
+  if(G.freezeFlash>0){
+    cx.fillStyle=`rgba(100,140,255,${(G.freezeFlash/0.5)*0.55})`;
+    cx.fillRect(0,0,W,H);
+  }
+  if(G.frozenDomain){
+    cx.fillStyle=`rgba(80,120,255,${0.1+0.06*(G.frozenTimer/10)})`;
+    cx.fillRect(0,0,W,H);
+    cx.fillStyle='#aaf'; cx.font='bold 20px Courier New'; cx.textAlign='center';
+    cx.shadowColor='#88f'; cx.shadowBlur=10;
+    cx.fillText(`FROZEN DOMAIN  ${G.frozenTimer.toFixed(1)}s`,W/2,38);
+    if(G.frozenBossBreakTimer>0){
+      cx.font='13px Courier New'; cx.shadowBlur=0;
+      cx.fillStyle='rgba(255,100,100,0.85)';
+      cx.fillText(`Boss breaks free in ${G.frozenBossBreakTimer.toFixed(1)}s`,W/2,58);
+    }
+    cx.shadowBlur=0;
+  }
+
   cx.restore();
 }
 
@@ -1423,8 +1749,80 @@ function updateHitboxBtn(){
   btn.style.color=showHitbox?'#4f4':'#888';
 }
 
+// ── STAR GAZER / DEALER SCREENS ───────────────────────────────────────────
+function afterNpc(){
+  if(G.merchantReady&&!G.merchantDone) showMerchant();
+  else showBuffScreen();
+}
+
+function showStarGazer(){
+  G.phase='stargazer'; show('stargazer');
+  const ultras=Object.entries(G.p.buffs).filter(([,d])=>d.tier==='ultra');
+  const sgCount=G.p.skills.filter(s=>s.isSG).length;
+  const slot=document.getElementById('sg-slot');
+  const cont=document.getElementById('sg-cards');
+  cont.innerHTML='';
+  if(sgCount>=2){slot.textContent='Already have 2 Star Gazer skills!';return;}
+  if(ultras.length<2){slot.textContent='Need at least 2 ULTRA powers to combine.';return;}
+  G.sgSelected=null;
+  renderSgCards(ultras);
+}
+
+function renderSgCards(ultras,selId=null){
+  const slot=document.getElementById('sg-slot');
+  const cont=document.getElementById('sg-cards');
+  cont.innerHTML='';
+  slot.textContent=selId?`Selected: ${BUFFS[selId]?.name||selId} — now pick the second`:'Pick the first ULTRA power to combine';
+  ultras.forEach(([id,d])=>{
+    const def=BUFFS[id]; if(!def) return;
+    const el=document.createElement('div');
+    el.className='card ultra';
+    el.style.cssText=selId===id?'border:3px solid #fff;':'';
+    el.innerHTML=`<div class="tag" style="color:#fa0">${def.icon} ${def.name} ULTRA</div><p style="font-size:.75em;color:#ccc">${def.ultraD||''}</p>`;
+    el.onclick=()=>{
+      if(!G.sgSelected){G.sgSelected=id;renderSgCards(ultras,id);}
+      else if(G.sgSelected!==id){pickSgCombo(G.sgSelected,id,ultras);}
+    };
+    cont.appendChild(el);
+  });
+}
+
+function pickSgCombo(idA,idB,ultras){
+  const p=G.p;
+  const k=sgKey(idA,idB);
+  const combo=SG_COMBOS[k];
+  const sgCount=p.skills.filter(s=>s.isSG).length;
+  const skillKey=sgCount===0?'c':'v';
+  const sk=combo?combo.mkSkill(p,skillKey):sgFallback(p,skillKey);
+  p.skills.push(sk);
+  hide('stargazer'); G.phase='clear';
+  floaty(p.x,p.y-55,`${sk.name} UNLOCKED!`,'#f0f');
+  burst(p.x,p.y,'#f0f',20,4);
+  afterNpc();
+}
+
+function showDealer(){
+  G.phase='dealer'; show('dealer');
+  const cont=document.getElementById('dealer-cards');
+  cont.innerHTML='';
+  const cards=[...DEALER_CARDS].sort(()=>Math.random()-0.5).slice(0,2);
+  cards.forEach(card=>{
+    const el=document.createElement('div');
+    el.className='card maximus';
+    el.innerHTML=`<div class="tag" style="color:#f0f">${card.icon} ${card.name}</div>
+      <p style="color:#4f8;font-size:.82em;margin-bottom:4px">↑ ${card.buff}</p>
+      <p style="color:#f44;font-size:.82em">↓ ${card.cost}</p>`;
+    el.onclick=()=>{
+      card.apply(G.p);
+      floaty(G.p.x,G.p.y-50,`${card.name}!`,'#f0f');
+      hide('dealer'); G.phase='clear'; afterNpc();
+    };
+    cont.appendChild(el);
+  });
+}
+
 // ── SCREEN HELPERS ────────────────────────────────────────────────────────
-const screens=['menu','clear','buff','debuff','merchant','over'];
+const screens=['menu','clear','buff','debuff','merchant','stargazer','dealer','over'];
 function show(id){ hide('all'); const el=document.getElementById('s-'+id); if(el)el.style.display='flex'; }
 function hide(id){
   if(id==='all') screens.forEach(s=>{const el=document.getElementById('s-'+s);if(el)el.style.display='none';});
@@ -1438,7 +1836,11 @@ document.getElementById('b-start').onclick=()=>{
   hide('all'); initGame(); requestAnimationFrame(ts=>{last=ts;requestAnimationFrame(loop);});
 };
 document.getElementById('b-tobuff').onclick=()=>{
-  if(G.merchantReady&&!G.merchantDone) showMerchant();
+  if(G.npcReady&&!G.npcDone){
+    G.npcDone=true; G.npcReady=false;
+    if(G.npcType==='stargazer') showStarGazer();
+    else showDealer();
+  } else if(G.merchantReady&&!G.merchantDone) showMerchant();
   else showBuffScreen();
 };
 document.getElementById('b-skip').onclick=()=>{
@@ -1458,6 +1860,8 @@ document.getElementById('b-quit').onclick=()=>{
   show('over'); G.phase='over';
 };
 document.getElementById('b-again').onclick=()=>show('menu');
+document.getElementById('b-sg-skip').onclick=()=>{hide('stargazer');G.phase='clear';afterNpc();};
+document.getElementById('b-dealer-skip').onclick=()=>{hide('dealer');G.phase='clear';afterNpc();};
 
 // ── BOOT ──────────────────────────────────────────────────────────────────
 show('menu');
